@@ -1,0 +1,6 @@
+{
+  "name": "Live Čat-Transkript",
+  "description": "Live transkripcija govora za nagluve osobe. Omogućava sinhronizovanu transkripciju u realnom vremenu između dva uređaja, prilagođenu korisnicima sa oštećenim sluhom.",
+  "requestFramePermissions": ["microphone", "camera", "geolocation"],
+  "majorCapabilities": []
+}

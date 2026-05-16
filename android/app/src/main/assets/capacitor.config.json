@@ -1,0 +1,6 @@
+{
+	"appId": "com.live.chat.transkript",
+	"appName": "Live Čat-Transkript",
+	"webDir": "dist",
+	"bundledWebRuntime": false
+}

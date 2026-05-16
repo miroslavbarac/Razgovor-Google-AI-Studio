@@ -1,0 +1,45 @@
+{
+  "entities": {
+    "session": {
+      "title": "Conversation Session",
+      "description": "A live transcript session between users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" },
+        "liveTranscript": {
+          "type": "object",
+          "properties": {
+            "text": { "type": "string" },
+            "senderId": { "type": "string" },
+            "updatedAt": { "type": "string", "format": "date-time" }
+          }
+        }
+      },
+      "required": ["createdAt", "createdBy"]
+    },
+    "message": {
+      "title": "Transcript Message",
+      "description": "A finalized block of transcribed text",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["text", "senderId", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/sessions/{sessionId}": {
+      "schema": "session",
+      "description": "Metadata for a transcript session"
+    },
+    "/sessions/{sessionId}/messages/{messageId}": {
+      "schema": "message",
+      "description": "Historical transcript blocks for a session"
+    }
+  }
+}
