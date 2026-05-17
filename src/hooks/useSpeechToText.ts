@@ -1,4 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { SpeechRecognition } from '@capacitor-community/speech-recognition';
+import { Capacitor } from '@capacitor/core';
 
 export interface UseSpeechToTextOptions {
   lang?: string;
@@ -21,30 +23,39 @@ export function useSpeechToText({
   const isListeningRequested = useRef(false);
   const onResultRef = useRef(onResult);
   const onErrorRef = useRef(onError);
+  const isNative = Capacitor.isNativePlatform();
 
   useEffect(() => {
     onResultRef.current = onResult;
     onErrorRef.current = onError;
   }, [onResult, onError]);
 
-  const stop = useCallback(() => {
+  const stop = useCallback(async () => {
     isListeningRequested.current = false;
     setIsListening(false);
-    if (recognitionRef.current) {
+    
+    if (isNative) {
+      try {
+        await SpeechRecognition.stop();
+        setIsRecognitionActive(false);
+      } catch (e) {
+        console.error('Native stop error:', e);
+      }
+    } else if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
       } catch (e) {}
     }
-  }, []);
+  }, [isNative]);
 
-  const createRecognition = useCallback(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
+  const createWebRecognition = useCallback(() => {
+    const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionClass) {
       console.error('Speech recognition not supported. Secure context:', window.isSecureContext);
       return null;
     }
 
-    const recognition = new SpeechRecognition();
+    const recognition = new SpeechRecognitionClass();
     recognition.lang = lang;
     recognition.continuous = true;
     recognition.interimResults = true;
@@ -56,7 +67,6 @@ export function useSpeechToText({
 
     recognition.onend = () => {
       setIsRecognitionActive(false);
-      // Restart if still requested (manual lock)
       if (isListeningRequested.current) {
         setTimeout(() => {
           if (isListeningRequested.current) {
@@ -77,7 +87,7 @@ export function useSpeechToText({
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
         isListeningRequested.current = false;
         setIsListening(false);
-        setError('Pristup mikrofonu je odbijen. Dozvolite ga u podešavanjima pretraživača.');
+        setError('Pristup mikrofonu je odbijen. Dozvolite ga u podešavanjima.');
       } else {
         setError(`Greška mikrofona: ${event.error}`);
       }
@@ -104,13 +114,61 @@ export function useSpeechToText({
     return recognition;
   }, [lang]);
 
+  const startNativeRecognition = useCallback(async () => {
+    try {
+      const { display } = await SpeechRecognition.checkPermissions();
+      if (display !== 'granted') {
+        const { display: newDisplay } = await SpeechRecognition.requestPermissions();
+        if (newDisplay !== 'granted') {
+          setError('Dozvola za mikrofon nije odobrena.');
+          setIsListening(false);
+          return;
+        }
+      }
+
+      const available = await SpeechRecognition.available();
+      if (!available.available) {
+        setError('Prepoznavanje govora nije dostupno na ovom uređaju.');
+        setIsListening(false);
+        return;
+      }
+
+      setIsListening(true);
+      setIsRecognitionActive(true);
+      setError(null);
+
+      SpeechRecognition.addListener('partialResults', (data: any) => {
+        if (onResultRef.current && data.matches && data.matches.length > 0) {
+          onResultRef.current(data.matches[0], false);
+        }
+      });
+
+      await SpeechRecognition.start({
+        language: lang,
+        partialResults: true,
+        popup: false,
+      });
+
+    } catch (e: any) {
+      console.error('Native recognition error:', e);
+      setError(`Greška: ${e.message || 'Neuspešno pokretanje prepoznavanja'}`);
+      setIsListening(false);
+      setIsRecognitionActive(false);
+    }
+  }, [lang]);
+
   const start = useCallback(() => {
-    // Kill existing if any
+    if (isNative) {
+      startNativeRecognition();
+      return;
+    }
+
+    // Web fallback
     if (recognitionRef.current) {
       try { recognitionRef.current.abort(); } catch (e) {}
     }
 
-    const rec = createRecognition();
+    const rec = createWebRecognition();
     if (!rec) {
       setError('Prepoznavanje govora nije podržano.');
       return;
@@ -129,17 +187,20 @@ export function useSpeechToText({
         setError('Neuspešno pokretanje mikrofona.');
       }
     }
-  }, [createRecognition]);
+  }, [isNative, createWebRecognition, startNativeRecognition]);
 
   // Clean up on unmount
   useEffect(() => {
     return () => {
       isListeningRequested.current = false;
-      if (recognitionRef.current) {
+      if (isNative) {
+        SpeechRecognition.removeAllListeners();
+        SpeechRecognition.stop();
+      } else if (recognitionRef.current) {
         try { recognitionRef.current.abort(); } catch (e) {}
       }
     };
-  }, []);
+  }, [isNative]);
 
   return {
     isListening,
@@ -147,7 +208,7 @@ export function useSpeechToText({
     error,
     start,
     stop,
-    isSupported: !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
+    isSupported: isNative ? true : !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
   };
 }
 
