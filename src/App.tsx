@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   onAuthStateChanged, 
   auth, 
-  signInWithGoogle, 
+  loginAnonymously, 
   db,
   doc,
   getDoc,
@@ -20,53 +20,6 @@ import { collection, onSnapshot, query, orderBy, addDoc, updateDoc, deleteDoc, d
 import { QRCodeSVG } from 'qrcode.react';
 
 // --- Components ---
-
-const Navbar = ({ user, onLogout }: { user: User | null; onLogout: () => void }) => (
-  <nav className="flex items-center justify-between p-4 bg-white border-b border-gray-100 sticky top-0 z-50">
-    <div className="flex items-center gap-2">
-      <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white">
-        <Mic size={24} />
-      </div>
-      <h1 className="text-xl font-bold tracking-tight text-gray-900">Čat-Transkript</h1>
-    </div>
-    {user && (
-      <div className="flex items-center gap-4">
-        <span className="hidden sm:inline text-sm text-gray-500 font-medium">{user.displayName}</span>
-        <button 
-          onClick={onLogout}
-          className="p-2 text-gray-400 hover:text-red-500 transition-colors"
-          title="Odjavi se"
-        >
-          <LogOut size={20} />
-        </button>
-      </div>
-    )}
-  </nav>
-);
-const Login = () => (
-  <div className="flex flex-col items-center justify-center min-h-[80vh] px-4 text-center">
-    <motion.div 
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="max-w-md w-full"
-    >
-      <div className="w-24 h-24 bg-indigo-600 rounded-full flex items-center justify-center text-white mx-auto mb-12 shadow-2xl">
-        <Mic size={48} />
-      </div>
-      <h2 className="text-4xl font-black text-gray-900 mb-6 uppercase tracking-tight">DOBRODOŠLI</h2>
-      <p className="text-gray-500 text-lg mb-12 leading-relaxed">
-        Povežite se momentalno. Vaš glas se pretvara u tekst u realnom vremenu.
-      </p>
-      <button
-        onClick={signInWithGoogle}
-        className="flex items-center justify-center gap-4 w-full py-6 px-8 bg-black text-white rounded-[2rem] font-black text-xl hover:bg-gray-800 transition-all shadow-xl active:scale-95"
-      >
-        <img src="https://www.google.com/favicon.ico" alt="Google" className="w-6 h-6 invert" />
-        PRIJAVI SE I POČNI
-      </button>
-    </motion.div>
-  </div>
-);
 
 const Dashboard = ({ user, config, onJoin, onOpenSettings, onOpenHistory }: { user: User; config: any; onJoin: () => void; onOpenSettings: () => void; onOpenHistory: () => void }) => {
   return (
@@ -759,10 +712,19 @@ export default function App() {
       setView('session');
     }
 
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      if (u && !config.myName) {
-        setConfig(prev => ({ ...prev, myName: u.displayName || u.email?.split('@')[0] || '' }));
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      if (!u) {
+        try {
+          await loginAnonymously();
+        } catch (err) {
+          console.error("Auth error:", err);
+        }
+      } else {
+        setUser(u);
+        if (!config.myName) {
+          const defaultName = u.displayName || (u.isAnonymous ? 'Ja' : u.email?.split('@')[0]) || 'Ja';
+          setConfig(prev => ({ ...prev, myName: defaultName }));
+        }
       }
       setLoading(false);
     });
@@ -775,7 +737,12 @@ export default function App() {
     </div>
   );
 
-  if (!user) return <Login />;
+  if (!user && !loading) return (
+    <div className="flex flex-col items-center justify-center h-screen bg-page-bg px-6 text-center">
+      <div className="w-16 h-16 border-4 border-accent-red border-t-transparent rounded-full animate-spin mb-4" />
+      <p className="text-sm font-black uppercase text-primary-dark/40 tracking-widest">Inicijalizacija...</p>
+    </div>
+  );
 
   const handleJoin = () => {
     setCurrentSession("RAZGOVOR");
