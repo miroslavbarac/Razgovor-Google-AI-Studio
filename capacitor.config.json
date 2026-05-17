@@ -2,5 +2,11 @@
   "appId": "com.live.chat.transkript",
   "appName": "Live Čat-Transkript",
   "webDir": "dist",
-  "bundledWebRuntime": false
+  "bundledWebRuntime": false,
+  "server": {
+    "allowNavigation": [
+      "*.firebaseapp.com",
+      "*.googleapis.com"
+    ]
+  }
 }
