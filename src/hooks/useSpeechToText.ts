@@ -115,22 +115,33 @@ export function useSpeechToText({
   }, [lang]);
 
   const startNativeRecognition = useCallback(async () => {
+    console.log('Starting native recognition...');
     try {
-      const { display } = await SpeechRecognition.checkPermissions();
-      if (display !== 'granted') {
-        const { display: newDisplay } = await SpeechRecognition.requestPermissions();
-        if (newDisplay !== 'granted') {
-          setError('Dozvola za mikrofon nije odobrena.');
-          setIsListening(false);
-          return;
-        }
-      }
-
       const available = await SpeechRecognition.available();
+      console.log('Recognition available:', available);
       if (!available.available) {
         setError('Prepoznavanje govora nije dostupno na ovom uređaju.');
         setIsListening(false);
         return;
+      }
+
+      const permissions = await SpeechRecognition.checkPermissions();
+      console.log('Current permissions:', permissions);
+      
+      // Check for both common permission keys
+      const hasPermission = (permissions as any).speechRecognition === 'granted' || (permissions as any).microphone === 'granted';
+      
+      if (!hasPermission) {
+        console.log('Requesting permissions...');
+        const result = await SpeechRecognition.requestPermissions();
+        console.log('Permission request result:', result);
+        const granted = (result as any).speechRecognition === 'granted' || (result as any).microphone === 'granted';
+        
+        if (!granted) {
+          setError('Dozvola za mikrofon nije odobrena.');
+          setIsListening(false);
+          return;
+        }
       }
 
       setIsListening(true);
