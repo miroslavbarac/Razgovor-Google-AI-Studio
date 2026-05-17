@@ -687,6 +687,7 @@ interface AppConfig {
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [currentSession, setCurrentSession] = useState<string | null>(null);
   const [view, setView] = useState<'dashboard' | 'session' | 'settings' | 'history'>('dashboard');
   
@@ -713,34 +714,62 @@ export default function App() {
     }
 
     const unsub = onAuthStateChanged(auth, async (u) => {
+      console.log("Auth state changed:", u ? "User present" : "No user");
       if (!u) {
         try {
+          console.log("Attempting anonymous login...");
           await loginAnonymously();
-        } catch (err) {
+          console.log("Anonymous login successful");
+        } catch (err: any) {
           console.error("Auth error:", err);
+          setAuthError(err.message || String(err));
+          setLoading(false);
         }
       } else {
         setUser(u);
+        setAuthError(null);
         if (!config.myName) {
           const defaultName = u.displayName || (u.isAnonymous ? 'Ja' : u.email?.split('@')[0]) || 'Ja';
           setConfig(prev => ({ ...prev, myName: defaultName }));
         }
+        setLoading(false);
       }
-      setLoading(false);
     });
     return unsub;
   }, []);
 
-  if (loading) return (
-    <div className="flex items-center justify-center h-screen bg-page-bg">
-      <div className="w-12 h-12 border-4 border-primary-dark border-t-transparent rounded-full animate-spin"></div>
+  if (authError) return (
+    <div className="flex flex-col items-center justify-center h-screen bg-page-bg px-6 text-center">
+      <div className="w-16 h-16 bg-accent-red/10 text-accent-red rounded-full flex items-center justify-center mb-6">
+        <X size={32} />
+      </div>
+      <h2 className="text-xl font-black text-primary-dark mb-4">GREŠKA PRI PRIJAVI</h2>
+      <p className="text-gray-500 font-medium mb-8 leading-relaxed max-w-sm">
+        Aplikacija nije uspela da se prijavi anonimno. Proverite da li je Anonymous auth omogućen u Firebase konzoli.
+      </p>
+      <div className="bg-white p-4 rounded-xl border border-black/5 text-xs font-mono text-accent-red mb-8 w-full overflow-auto max-h-32">
+        {authError}
+      </div>
+      <button 
+        onClick={() => window.location.reload()}
+        className="px-8 py-4 bg-primary-dark text-white rounded-full font-bold shadow-lg active:scale-95 transition-all"
+      >
+        Pokušaj ponovo
+      </button>
     </div>
   );
 
-  if (!user && !loading) return (
+  if (loading) return (
     <div className="flex flex-col items-center justify-center h-screen bg-page-bg px-6 text-center">
       <div className="w-16 h-16 border-4 border-accent-red border-t-transparent rounded-full animate-spin mb-4" />
-      <p className="text-sm font-black uppercase text-primary-dark/40 tracking-widest">Inicijalizacija...</p>
+      <p className="text-sm font-black uppercase text-primary-dark/40 tracking-widest animate-pulse">Inicijalizacija...</p>
+    </div>
+  );
+
+  if (!user) return (
+    <div className="flex flex-col items-center justify-center h-screen bg-page-bg px-6 text-center">
+      <div className="w-16 h-16 border-4 border-accent-red border-t-transparent rounded-full animate-spin mb-4" />
+      <p className="text-sm font-black uppercase text-primary-dark/40 tracking-widest">Priprema korisnika...</p>
     </div>
   );
 
