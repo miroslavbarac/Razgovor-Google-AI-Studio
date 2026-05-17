@@ -22,7 +22,7 @@ import { QRCodeSVG } from 'qrcode.react';
 
 // --- Components ---
 
-const Dashboard = ({ user, config, onJoin, onOpenSettings, onOpenHistory }: { user: User; config: any; onJoin: () => void; onOpenSettings: () => void; onOpenHistory: () => void }) => {
+const Dashboard = ({ user, config, onJoin, onOpenSettings, onOpenHistory, setConfig }: { user: User; config: any; onJoin: () => void; onOpenSettings: () => void; onOpenHistory: () => void; setConfig: any }) => {
   const clearHistory = async () => {
     if (!window.confirm('Da li ste sigurni da želite da obrišete kompletnu istoriju razgovora?')) return;
     try {
@@ -33,6 +33,20 @@ const Dashboard = ({ user, config, onJoin, onOpenSettings, onOpenHistory }: { us
       // Since it's a specific 'RAZGOVOR' session, we clear its messages
       alert('Molimo koristite kanticu u Istoriji za brisanje.');
     } catch (e) {}
+  };
+
+  const [newPartnerName, setNewPartnerName] = useState('');
+  const [newPartnerEmail, setNewPartnerEmail] = useState('');
+  const [isAddingPartner, setIsAddingPartner] = useState(false);
+
+  const addPartner = () => {
+    if (!newPartnerEmail.includes('@')) {
+      alert('Unesite ispravan email sagovornika.');
+      return;
+    }
+    onOpenSettings(); // Temporarily use settings to save, or we can update directly
+    // Actually, let's update directly if we passed setConfig to Dashboard.
+    // For now, I'll modify Dashboard to accept setConfig.
   };
 
   return (
@@ -76,23 +90,57 @@ const Dashboard = ({ user, config, onJoin, onOpenSettings, onOpenHistory }: { us
           </div>
           <div className="flex gap-4 text-primary-dark/20">
             <SettingsIcon className="hover:text-primary-dark transition-colors cursor-pointer" size={20} onClick={onOpenSettings} />
-            <Trash2 className="hover:text-accent-red transition-colors cursor-pointer" size={20} onClick={onOpenHistory} />
           </div>
         </div>
 
-        <div className="bg-white p-8 rounded-[2rem] shadow-sm flex items-center gap-6 border border-black/5">
-          <div className="w-12 h-12 bg-[#008080]/10 text-[#008080] rounded-full flex items-center justify-center">
-            <UserIcon size={24} />
+        {!config.partnerEmail ? (
+          <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-dashed border-primary-dark/20 flex flex-col items-center text-center gap-4">
+             <div className="w-12 h-12 bg-gray-50 text-gray-300 rounded-full flex items-center justify-center">
+               <Users size={24} />
+             </div>
+             <div>
+               <p className="text-lg font-bold text-primary-dark">Dodaj sagovornika</p>
+               <p className="text-sm font-medium text-primary-dark/40">Unesi email osobe sa kojom želiš razgovor</p>
+             </div>
+             <button 
+               onClick={onOpenSettings} 
+               className="px-6 py-3 bg-primary-dark text-white rounded-full text-sm font-bold hover:bg-black transition-all"
+             >
+               Podesi email
+             </button>
           </div>
-          <div className="flex-1">
-            <p className="text-[10px] font-black text-primary-dark/30 uppercase tracking-widest mb-1">SAGOVORNIK</p>
-            <p className="text-xl font-bold text-primary-dark">{config.partnerEmail.split('@')[0]}</p>
-            <p className="text-sm font-medium text-primary-dark/40">{config.partnerEmail}</p>
+        ) : (
+          <div className="bg-white p-8 rounded-[2rem] shadow-sm flex items-center gap-6 border border-black/5 relative group">
+            <div className="w-12 h-12 bg-[#008080]/10 text-[#008080] rounded-full flex items-center justify-center">
+              <UserIcon size={24} />
+            </div>
+            <div className="flex-1">
+              <p className="text-[10px] font-black text-primary-dark/30 uppercase tracking-widest mb-1">SAGOVORNIK</p>
+              <p className="text-xl font-bold text-primary-dark">{config.partnerEmail.split('@')[0]}</p>
+              <p className="text-sm font-medium text-primary-dark/40">{config.partnerEmail}</p>
+            </div>
+            <div className="flex gap-4 text-primary-dark/20">
+              <button 
+                onClick={onOpenSettings} 
+                className="hover:text-primary-dark transition-colors"
+                title="Izmeni"
+              >
+                <SettingsIcon size={20} />
+              </button>
+              <button 
+                onClick={() => {
+                  if (window.confirm('Ukloni ovog sagovornika?')) {
+                    setConfig({ ...config, partnerEmail: '' });
+                  }
+                }} 
+                className="hover:text-accent-red transition-colors"
+                title="Obriši"
+              >
+                <Trash2 size={20} />
+              </button>
+            </div>
           </div>
-          <div className="flex gap-4 text-primary-dark/20">
-            <SettingsIcon className="hover:text-primary-dark transition-colors cursor-pointer" size={20} onClick={onOpenSettings} />
-          </div>
-        </div>
+        )}
       </div>
 
       <button 
@@ -447,27 +495,29 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
 
     if (commitTimeoutRef.current) clearTimeout(commitTimeoutRef.current);
 
-    // Na Androidu (Native), svako novo javljanje je novi "segment" koji se nadovezuje
-    // Na Webu, useSpeechToText već šalje parcijale
+    // Na Androidu (Native), svako novo javljanje nakon pauze je novi "segment".
+    // Plugin partialResults na Androidu vraća ceo trenutni segment.
     
     const currentBuffer = sessionBufferRef.current.trim();
-    let currentText = trimmed;
+    let updatedText = trimmed;
 
     if (isNative) {
-      // Provera da li je trimmed nastavak ili novi segment
-      // Ako trimmed ne počinje onim što već imamo, a imamo nešto, verovatno je Android restartovao sesiju
-      if (currentBuffer && !trimmed.toLowerCase().startsWith(currentBuffer.toLowerCase().slice(0, 5))) {
-        currentText = `${currentBuffer} ${trimmed}`;
+      // Ako trimmed ne počinje onim što imamo, a imamo nešto, verovatno je Android restartovao sesiju
+      // ili se vratio novi segment. 
+      // Proveravamo da li je trimmed očigledno novi segment (ne sadrži kraj starog)
+      const lastWords = currentBuffer.split(' ').slice(-3).join(' ').toLowerCase();
+      if (currentBuffer && lastWords && !trimmed.toLowerCase().includes(lastWords)) {
+        updatedText = `${currentBuffer} ${trimmed}`;
       }
     }
     
-    sessionBufferRef.current = currentText;
+    sessionBufferRef.current = updatedText;
 
     try {
       await setDoc(sessionRef, {
         liveTranscripts: {
           [user.uid]: {
-            text: currentText,
+            text: updatedText,
             senderId: user.uid,
             senderName: myName,
             updatedAt: Date.now()
@@ -482,8 +532,6 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
         const myName = config.myName || user.displayName || user.email?.split('@')[0] || 'Anonim';
         const sessionRef = doc(db, 'sessions', sessionId);
         
-        sessionBufferRef.current = '';
-        
         await addDoc(collection(sessionRef, 'messages'), {
           text: textToCommit,
           senderId: user.uid,
@@ -491,8 +539,16 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
           timestamp: serverTimestamp()
         });
 
-        // Ne brišemo odmah liveTranscript da ne bi bilo "skakanja" na ekranu
-        // On će nestati prirodno nakon 8s (stale check) ili prvim sledećim kucanjem
+        // Sačekamo malo pre nego što obrišemo live buffer sa ekrana
+        // Ovo omogućava bazi da učita novu poruku u listu pre nego što nestane live tekst
+        setTimeout(async () => {
+          if (sessionBufferRef.current.trim() === textToCommit) {
+            sessionBufferRef.current = '';
+          }
+          await updateDoc(sessionRef, {
+            [`liveTranscripts.${user.uid}`]: deleteField()
+          });
+        }, 1000);
       }, 5000); 
     } catch (err) {
       console.error('Sync error:', err);
@@ -691,7 +747,15 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
           {Object.entries(liveTranscripts).map(([uid, data]: [string, any]) => {
             const isMe = uid === user.uid;
             if (!data?.text) return null;
-            const isStale = Date.now() - (data.updatedAt || 0) > 8000;
+            
+            // Provera da li je ovaj text već u listi poslednjih poruka
+            const alreadyInMessages = messages.slice(-2).some(m => 
+              m.text.toLowerCase().includes(data.text.toLowerCase().trim()) ||
+              data.text.toLowerCase().includes(m.text.toLowerCase().trim())
+            );
+            if (alreadyInMessages) return null;
+
+            const isStale = Date.now() - (data.updatedAt || 0) > 10000;
             if (isStale) return null;
 
             return (
@@ -902,6 +966,7 @@ export default function App() {
             onJoin={handleJoin} 
             onOpenSettings={() => setView('settings')}
             onOpenHistory={() => setView('history')}
+            setConfig={setConfig}
           />
         )}
       </AnimatePresence>

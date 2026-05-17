@@ -21,12 +21,16 @@ export function useSpeechToText({
   
   const recognitionRef = useRef<any>(null);
   const isListeningRequested = useRef(false);
+  const lastResultTimeRef = useRef(Date.now());
   const onResultRef = useRef(onResult);
   const onErrorRef = useRef(onError);
   const isNative = Capacitor.isNativePlatform();
 
   useEffect(() => {
-    onResultRef.current = onResult;
+    onResultRef.current = (text: string, isFinal: boolean) => {
+      lastResultTimeRef.current = Date.now();
+      if (onResult) onResult(text, isFinal);
+    };
     onErrorRef.current = onError;
   }, [onResult, onError]);
 
@@ -124,30 +128,37 @@ export function useSpeechToText({
     if (!isNative) return;
 
     const setupListeners = async () => {
-      await SpeechRecognition.removeAllListeners();
-      
-      await SpeechRecognition.addListener('partialResults', (data: any) => {
-        if (onResultRef.current && data.matches && data.matches.length > 0) {
-          onResultRef.current(data.matches[0], false);
-        }
-      });
+      try {
+        await SpeechRecognition.removeAllListeners();
+        
+        await SpeechRecognition.addListener('partialResults', (data: any) => {
+          if (onResultRef.current && data.matches && data.matches.length > 0) {
+            onResultRef.current(data.matches[0], false);
+          }
+        });
 
-      await SpeechRecognition.addListener('listeningState', (data: any) => {
-        console.log('Native listening state:', data.status);
-        setIsRecognitionActive(data.status === 'started');
-      });
+        await SpeechRecognition.addListener('listeningState', (data: any) => {
+          console.log('Native listening state changed:', data.status);
+          setIsRecognitionActive(data.status === 'started');
+        });
 
-      (SpeechRecognition as any).addListener('error', (data: any) => {
-        console.error('Native speech error:', data);
-        if (data.error === 'not-allowed' || data.error === 'service-not-allowed') {
-          setError('Dozvola za mikrofon nije odobrena.');
-          setIsListening(false);
-          isListeningRequested.current = false;
-        } else if (data.error === 'no-speech') {
-          // Normal on Android to stop on silence
+        // Use any because the plugin types might be outdated in our environment
+        (SpeechRecognition as any).addListener('error', (data: any) => {
+          console.warn('Native speech error listener:', data);
           setIsRecognitionActive(false);
-        }
-      });
+          
+          if (data.error === 'not-allowed' || data.error === 'service-not-allowed') {
+            setError('Mikrofon nije odobren u sistemu.');
+            setIsListening(false);
+            isListeningRequested.current = false;
+          } else if (data.error === 'network' || data.error === 'network-timeout') {
+            setError('Greška mreže. Proverite internet.');
+          }
+          // no-speech and others are handled by the restart logic watching isRecognitionActive
+        });
+      } catch (e) {
+        console.error('Error setting up listeners:', e);
+      }
     };
 
     setupListeners();
@@ -157,16 +168,20 @@ export function useSpeechToText({
   }, [isNative]);
 
   const startNativeRecognition = useCallback(async () => {
-    if (isRecognitionActive) return;
+    // Ako je već aktivan, ne radimo ništa
+    if (isRecognitionActive) {
+      console.log('Native prepoznavanje je već aktivno.');
+      return;
+    }
     
-    console.log('Pokrećem native prepoznavanje...');
+    console.log('Pokrećem native prepoznavanje (startNative)...');
     isListeningRequested.current = true;
     setIsListening(true);
 
     try {
       const available = await SpeechRecognition.available();
       if (!available.available) {
-        setError('Prepoznavanje govora nije dostupno na ovom uređaju.');
+        setError('Prepoznavanje govora nije dostupno.');
         setIsListening(false);
         isListeningRequested.current = false;
         return;
@@ -176,7 +191,7 @@ export function useSpeechToText({
       if (permissions.speechRecognition !== 'granted') {
         permissions = await SpeechRecognition.requestPermissions();
         if (permissions.speechRecognition !== 'granted') {
-          setError('Dozvola za mikrofon nije odobrena.');
+          setError('Nema dozvole za mikrofon.');
           setIsListening(false);
           isListeningRequested.current = false;
           return;
@@ -184,52 +199,60 @@ export function useSpeechToText({
       }
 
       setError(null);
-      // We don't remove listeners here, they are set in useEffect
-
+      
       await SpeechRecognition.start({
         language: lang,
         partialResults: true,
         popup: false,
       });
+      
       setIsRecognitionActive(true);
+      console.log('Native prepoznavanje uspešno pokrenuto.');
 
     } catch (e: any) {
-      console.error('Greška u native prepoznavanju:', e);
+      console.error('Bacio grešku pri startu:', e);
+      
       if (e.message && e.message.includes('already started')) {
         setIsRecognitionActive(true);
         return;
       }
       
       setIsRecognitionActive(false);
+      // Restartuj posle sekunde ako je ipak puklo
       if (isListeningRequested.current) {
-        // Retry one more time
         setTimeout(() => {
-          if (isListeningRequested.current && !isRecognitionActive) startNativeRecognition();
-        }, 1000);
+          if (isListeningRequested.current && !isRecognitionActive) {
+             startNativeRecognition();
+          }
+        }, 1500);
       }
     }
   }, [lang, isRecognitionActive]);
 
-  // Restart logic for Native (Android stops after a short silence)
+  // Restart logic for Native (Watchdog)
   useEffect(() => {
-    if (!isNative || !isListeningRequested.current) return;
+    if (!isNative) return;
 
-    let restartTimer: NodeJS.Timeout;
-
-    if (isListening && !isRecognitionActive && isListeningRequested.current) {
-      // 1 sekunda pauze pre restarta
-      restartTimer = setTimeout(() => {
-        if (isListeningRequested.current && !isRecognitionActive) {
-          console.log('Restartujem mikrofon...');
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const inactiveTooLong = now - lastResultTimeRef.current > 12000;
+      
+      if (isListeningRequested.current) {
+        if (!isRecognitionActive || inactiveTooLong) {
+          if (inactiveTooLong && isRecognitionActive) {
+            console.log('Watchdog: Nema rezultata predugo. Forsiram restart...');
+          } else {
+            console.log('Watchdog: Mikrofon je ugašen. Restartujem...');
+          }
+          // Reset status to allow start
+          setIsRecognitionActive(false);
           startNativeRecognition();
         }
-      }, 1000);
-    }
+      }
+    }, 2500);
 
-    return () => {
-      if (restartTimer) clearTimeout(restartTimer);
-    };
-  }, [isListening, isRecognitionActive, isNative, startNativeRecognition]);
+    return () => clearInterval(interval);
+  }, [isNative, isRecognitionActive, startNativeRecognition]);
 
   const start = useCallback(() => {
     if (isNative) {
