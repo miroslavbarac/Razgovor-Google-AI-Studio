@@ -22,6 +22,18 @@ import { QRCodeSVG } from 'qrcode.react';
 // --- Components ---
 
 const Dashboard = ({ user, config, onJoin, onOpenSettings, onOpenHistory }: { user: User; config: any; onJoin: () => void; onOpenSettings: () => void; onOpenHistory: () => void }) => {
+  const clearHistory = async () => {
+    if (!window.confirm('Da li ste sigurni da želite da obrišete kompletnu istoriju razgovora?')) return;
+    try {
+      const msgsRef = collection(db, 'sessions', 'RAZGOVOR', 'messages');
+      const q = query(msgsRef);
+      const snapshot = await onSnapshot(q, () => {}); // We use the already loaded messages in parent or here
+      // Simplest way is let the App handle global state or just use direct firestore delete
+      // Since it's a specific 'RAZGOVOR' session, we clear its messages
+      alert('Molimo koristite kanticu u Istoriji za brisanje.');
+    } catch (e) {}
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0 }}
@@ -63,7 +75,7 @@ const Dashboard = ({ user, config, onJoin, onOpenSettings, onOpenHistory }: { us
           </div>
           <div className="flex gap-4 text-primary-dark/20">
             <SettingsIcon className="hover:text-primary-dark transition-colors cursor-pointer" size={20} onClick={onOpenSettings} />
-            <Trash2 className="hover:text-accent-red transition-colors cursor-pointer" size={20} />
+            <Trash2 className="hover:text-accent-red transition-colors cursor-pointer" size={20} onClick={onOpenHistory} />
           </div>
         </div>
 
@@ -78,7 +90,6 @@ const Dashboard = ({ user, config, onJoin, onOpenSettings, onOpenHistory }: { us
           </div>
           <div className="flex gap-4 text-primary-dark/20">
             <SettingsIcon className="hover:text-primary-dark transition-colors cursor-pointer" size={20} onClick={onOpenSettings} />
-            <Trash2 className="hover:text-accent-red transition-colors cursor-pointer" size={20} />
           </div>
         </div>
       </div>
@@ -280,6 +291,26 @@ const HistoryView = ({ config, onBack }: { config: AppConfig; onBack: () => void
     URL.revokeObjectURL(url);
   };
 
+  const clearHistory = async () => {
+    if (!window.confirm('Da li ste sigurni da želite da obrišete kompletnu istoriju razgovora?')) return;
+    
+    try {
+      setLoading(true);
+      const q = query(collection(db, 'sessions', 'RAZGOVOR', 'messages'));
+      const snapshot = await getDoc(doc(db, 'sessions', 'RAZGOVOR')); // This is just to check
+      // For simplicity in Firestore with limited tools, we delete the known messages
+      for (const msg of messages) {
+        await deleteDoc(doc(db, 'sessions', 'RAZGOVOR', 'messages', msg.id));
+      }
+      alert('Istorija je obrisana.');
+    } catch (err) {
+      console.error('Greška pri brisanju:', err);
+      alert('Greška pri brisanju istorije.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0, x: -20 }}
@@ -299,14 +330,25 @@ const HistoryView = ({ config, onBack }: { config: AppConfig; onBack: () => void
             {selectedDate ? formatDateLabel(selectedDate) : 'Istorija'}
           </h1>
         </div>
-        {selectedDate && (
-          <button 
-            onClick={() => downloadTranscripts(selectedDate)}
-            className="flex items-center gap-2 bg-accent-red text-white px-4 py-2 rounded-full text-xs font-black uppercase hover:bg-black transition-all shadow-lg active:scale-95"
-          >
-            Preuzmi
-          </button>
-        )}
+        <div className="flex gap-2">
+          {selectedDate && (
+            <button 
+              onClick={() => downloadTranscripts(selectedDate)}
+              className="flex items-center gap-2 bg-accent-red text-white px-4 py-2 rounded-full text-xs font-black uppercase hover:bg-black transition-all shadow-lg active:scale-95"
+            >
+              Preuzmi
+            </button>
+          )}
+          {!selectedDate && messages.length > 0 && (
+            <button 
+              onClick={clearHistory}
+              className="p-3 bg-gray-100 text-gray-400 hover:text-accent-red hover:bg-accent-red/10 rounded-full transition-all"
+              title="Obriši sve"
+            >
+              <Trash2 size={20} />
+            </button>
+          )}
+        </div>
       </div>
 
       {loading ? (
@@ -417,6 +459,10 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
       commitTimeoutRef.current = setTimeout(async () => {
         const textToCommit = sessionBufferRef.current.trim();
         if (!textToCommit) return;
+        
+        const myName = config.myName || user.displayName || user.email?.split('@')[0] || 'Anonim';
+        const sessionRef = doc(db, 'sessions', sessionId);
+        
         sessionBufferRef.current = '';
         
         await addDoc(collection(sessionRef, 'messages'), {
@@ -429,7 +475,7 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
         await updateDoc(sessionRef, {
           [`liveTranscripts.${user.uid}`]: deleteField()
         });
-      }, 5000); 
+      }, 6000); 
     } catch (err) {
       console.error('Sync error:', err);
     }
@@ -530,6 +576,14 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
 
   // --- Main Render ---
 
+  const deleteMessage = async (msgId: string) => {
+    try {
+      await deleteDoc(doc(db, 'sessions', sessionId, 'messages', msgId));
+    } catch (e) {
+      console.error('Greška pri brisanju poruke:', e);
+    }
+  };
+
   const hasContent = messages.length > 0 || Object.values(liveTranscripts).some((t: any) => t?.text);
 
   return (
@@ -587,25 +641,38 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
 
         <div className="w-full max-w-4xl">
           {messages.map((m) => (
-            <motion.div
-              key={m.id}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className={`mb-12 flex flex-col ${m.senderId === user.uid ? 'items-end' : 'items-start'}`}
-            >
-              <div 
-                className={`
-                  max-w-[95%] p-1 rounded-3xl font-extrabold leading-[1.1] tracking-tight
-                  ${m.senderId === user.uid ? 'text-right' : 'text-left'}
-                `}
-                style={{ fontSize: `${config.textSize * 2.5}rem` }}
-              >
-                {displayText(m.text)}
+              <div className={`mb-12 flex flex-col w-full ${m.senderId === user.uid ? 'items-end' : 'items-start'}`}>
+                <div className="flex items-start gap-4 w-full">
+                  {m.senderId !== user.uid && (
+                    <button 
+                      onClick={() => deleteMessage(m.id)}
+                      className="mt-4 p-2 text-primary-dark/5 hover:text-accent-red transition-colors"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+                  <div 
+                    className={`
+                      flex-1 p-1 rounded-3xl font-extrabold leading-[1.1] tracking-tight
+                      ${m.senderId === user.uid ? 'text-right' : 'text-left'}
+                    `}
+                    style={{ fontSize: `${config.textSize * 2.5}rem` }}
+                  >
+                    {displayText(m.text)}
+                  </div>
+                  {m.senderId === user.uid && (
+                    <button 
+                      onClick={() => deleteMessage(m.id)}
+                      className="mt-4 p-2 text-primary-dark/5 hover:text-accent-red transition-colors"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+                </div>
+                <p className="mt-4 text-[10px] font-black text-primary-dark/20 uppercase tracking-[0.2em]">
+                  {m.senderName} • {m.timestamp?.seconds ? new Date(m.timestamp.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '...'}
+                </p>
               </div>
-              <p className="mt-4 text-[10px] font-black text-primary-dark/20 uppercase tracking-[0.2em]">
-                {m.senderName} • {m.timestamp?.seconds ? new Date(m.timestamp.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '...'}
-              </p>
-            </motion.div>
           ))}
 
           {/* Live transcripts */}

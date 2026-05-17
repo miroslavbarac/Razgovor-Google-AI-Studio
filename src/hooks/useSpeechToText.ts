@@ -31,13 +31,16 @@ export function useSpeechToText({
   }, [onResult, onError]);
 
   const stop = useCallback(async () => {
+    console.log('Zaustavljanje mikrofona...');
     isListeningRequested.current = false;
     setIsListening(false);
+    setIsRecognitionActive(false);
     
     if (isNative) {
       try {
+        await SpeechRecognition.removeAllListeners();
         await SpeechRecognition.stop();
-        setIsRecognitionActive(false);
+        console.log('Native recognition zaustavljen.');
       } catch (e) {
         console.error('Native stop error:', e);
       }
@@ -72,7 +75,7 @@ export function useSpeechToText({
           if (isListeningRequested.current) {
             start();
           }
-        }, 300);
+        }, 100);
       } else {
         setIsListening(false);
       }
@@ -117,39 +120,33 @@ export function useSpeechToText({
   const isSupported = isNative ? true : !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
 
   const startNativeRecognition = useCallback(async () => {
+    if (isRecognitionActive) return;
+    
     console.log('Pokrećem native prepoznavanje...');
+    isListeningRequested.current = true;
+    setIsListening(true);
+
     try {
-      // 1. Provera dostupnosti servisa na uređaju
       const available = await SpeechRecognition.available();
-      console.log('Dostupnost:', available);
       if (!available.available) {
-        setError('Prepoznavanje govora nije dostupno na ovom uređaju. Proverite Google aplikaciju.');
+        setError('Prepoznavanje govora nije dostupno na ovom uređaju.');
         setIsListening(false);
+        isListeningRequested.current = false;
         return;
       }
 
-      // 2. Provera i zahtevanje dozvola
       let permissions = await SpeechRecognition.checkPermissions();
-      console.log('Trenutne dozvole:', permissions);
-      
       if (permissions.speechRecognition !== 'granted') {
-        console.log('Zahtevam dozvole...');
         permissions = await SpeechRecognition.requestPermissions();
-        console.log('Rezultat zahteva:', permissions);
-        
         if (permissions.speechRecognition !== 'granted') {
-          setError('Dozvola za mikrofon nije odobrena u sistemu.');
+          setError('Dozvola za mikrofon nije odobrena.');
           setIsListening(false);
+          isListeningRequested.current = false;
           return;
         }
       }
 
-      // 3. Pokretanje slušanja
-      setIsListening(true);
-      setIsRecognitionActive(true);
       setError(null);
-
-      // Uklanjamo stare listenere pre dodavanja novih
       await SpeechRecognition.removeAllListeners();
 
       SpeechRecognition.addListener('partialResults', (data: any) => {
@@ -158,6 +155,12 @@ export function useSpeechToText({
         }
       });
 
+      SpeechRecognition.addListener('listeningState', (data: any) => {
+        console.log('Native listening state:', data.status);
+        setIsRecognitionActive(data.status === 'started');
+      });
+
+      setIsRecognitionActive(true);
       await SpeechRecognition.start({
         language: lang,
         partialResults: true,
@@ -166,11 +169,40 @@ export function useSpeechToText({
 
     } catch (e: any) {
       console.error('Greška u native prepoznavanju:', e);
-      setError(`Greška: ${e.message || 'Neuspešno pokretanje'}`);
-      setIsListening(false);
       setIsRecognitionActive(false);
+      if (e.message && e.message.includes('already started')) {
+        setIsRecognitionActive(true);
+        return;
+      }
+      
+      if (isListeningRequested.current) {
+        setTimeout(() => {
+          if (isListeningRequested.current) startNativeRecognition();
+        }, 1500);
+      }
     }
-  }, [lang]);
+  }, [lang, isRecognitionActive]);
+
+  // Restart logic for Native (Android stops after a short silence)
+  useEffect(() => {
+    if (!isNative || !isListeningRequested.current) return;
+
+    let restartTimer: NodeJS.Timeout;
+
+    if (isListening && !isRecognitionActive && isListeningRequested.current) {
+      // 2 sekunde pauze pre restarta da izbegnemo "flapping"
+      restartTimer = setTimeout(() => {
+        if (isListeningRequested.current && !isRecognitionActive) {
+          console.log('Automatski restartujem mikrofon nakon pauze...');
+          startNativeRecognition();
+        }
+      }, 2000);
+    }
+
+    return () => {
+      if (restartTimer) clearTimeout(restartTimer);
+    };
+  }, [isListening, isRecognitionActive, isNative, startNativeRecognition]);
 
   const start = useCallback(() => {
     if (isNative) {
