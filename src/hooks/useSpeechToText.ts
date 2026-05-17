@@ -39,7 +39,10 @@ export function useSpeechToText({
 
   const createRecognition = useCallback(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) return null;
+    if (!SpeechRecognition) {
+      console.error('Speech recognition not supported. Secure context:', window.isSecureContext);
+      return null;
+    }
 
     const recognition = new SpeechRecognition();
     recognition.lang = lang;
