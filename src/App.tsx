@@ -78,25 +78,25 @@ const Dashboard = ({ user, config, onJoin, onOpenSettings, onOpenHistory, setCon
         Dva naloga, jedan razgovor. Dodaj sebe i sagovornika — sesija je odmah aktivna.
       </p>
 
-      <div className="space-y-4 mb-24">
+      <div className="space-y-4 mb-12">
         <div className="bg-white p-8 rounded-[2rem] shadow-sm flex items-center gap-6 border border-black/5">
-          <div className="w-12 h-12 bg-accent-red/10 text-accent-red rounded-full flex items-center justify-center">
+          <div className="w-12 h-12 bg-accent-red/10 text-accent-red rounded-full flex items-center justify-center shrink-0">
             <UserIcon size={24} />
           </div>
-          <div className="flex-1">
+          <div className="flex-1 min-w-0">
             <p className="text-[10px] font-black text-primary-dark/30 uppercase tracking-widest mb-1">TVOJ NALOG</p>
-            <p className="text-xl font-bold text-primary-dark">{config.myName || 'Podesi ime'}</p>
-            <p className="text-sm font-medium text-primary-dark/40">{user.email}</p>
+            <p className="text-xl font-bold text-primary-dark truncate">{config.myName || 'Podesi ime'}</p>
+            <p className="text-sm font-medium text-primary-dark/40 truncate">{user.email}</p>
           </div>
-          <div className="flex gap-4 text-primary-dark/20">
-            <SettingsIcon className="hover:text-primary-dark transition-colors cursor-pointer" size={20} onClick={onOpenSettings} />
-          </div>
+          <button onClick={onOpenSettings} className="p-2 text-primary-dark/20 hover:text-primary-dark transition-colors">
+            <SettingsIcon size={20} />
+          </button>
         </div>
 
         {!config.partnerEmail ? (
           <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-black/5 flex flex-col gap-6">
              <div className="flex items-center gap-6">
-               <div className="w-12 h-12 bg-gray-50 text-gray-300 rounded-full flex items-center justify-center">
+               <div className="w-12 h-12 bg-gray-50 text-gray-300 rounded-full flex items-center justify-center shrink-0">
                  <Users size={24} />
                </div>
                <div className="flex-1">
@@ -111,7 +111,7 @@ const Dashboard = ({ user, config, onJoin, onOpenSettings, onOpenHistory, setCon
                  className="flex-1 bg-page-bg border-2 border-transparent rounded-2xl px-4 py-3 text-sm font-bold focus:border-accent-red outline-none transition-all"
                  onKeyDown={(e) => {
                    if (e.key === 'Enter') {
-                     const email = (e.currentTarget as HTMLInputElement).value;
+                     const email = e.currentTarget.value;
                      if (email.includes('@')) {
                        setConfig({ ...config, partnerEmail: email });
                      }
@@ -135,18 +135,18 @@ const Dashboard = ({ user, config, onJoin, onOpenSettings, onOpenHistory, setCon
           </div>
         ) : (
           <div className="bg-white p-8 rounded-[2rem] shadow-sm flex items-center gap-6 border border-black/5 relative group">
-            <div className="w-12 h-12 bg-[#008080]/10 text-[#008080] rounded-full flex items-center justify-center">
+            <div className="w-12 h-12 bg-[#008080]/10 text-[#008080] rounded-full flex items-center justify-center shrink-0">
               <UserIcon size={24} />
             </div>
-            <div className="flex-1">
+            <div className="flex-1 min-w-0">
               <p className="text-[10px] font-black text-primary-dark/30 uppercase tracking-widest mb-1">SAGOVORNIK</p>
-              <p className="text-xl font-bold text-primary-dark">{config.partnerEmail.split('@')[0]}</p>
-              <p className="text-sm font-medium text-primary-dark/40">{config.partnerEmail}</p>
+              <p className="text-xl font-bold text-primary-dark truncate">{config.partnerEmail.split('@')[0]}</p>
+              <p className="text-sm font-medium text-primary-dark/40 truncate">{config.partnerEmail}</p>
             </div>
-            <div className="flex gap-4 text-primary-dark/20">
+            <div className="flex gap-2 text-primary-dark/20">
               <button 
                 onClick={onOpenSettings} 
-                className="hover:text-primary-dark transition-colors"
+                className="p-2 hover:text-primary-dark transition-colors"
                 title="Izmeni"
               >
                 <SettingsIcon size={20} />
@@ -157,7 +157,7 @@ const Dashboard = ({ user, config, onJoin, onOpenSettings, onOpenHistory, setCon
                     setConfig({ ...config, partnerEmail: '' });
                   }
                 }} 
-                className="hover:text-accent-red transition-colors"
+                className="p-2 hover:text-accent-red transition-colors"
                 title="Obriši"
               >
                 <Trash2 size={20} />
@@ -537,11 +537,28 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
     
     sessionBufferRef.current = updatedText;
 
+    // SIMULTANI UPIS: Ako govornik priča dugo bez pauze (npr. više od 30 reči), 
+    // komitujemo jedan segment odmah da ne bi nestalo sa ekrana ili ostalo samo lokalno
+    const words = updatedText.split(/\s+/).filter(Boolean).length;
+    if (words > 25) {
+      const myName = config.myName || user.displayName || user.email?.split('@')[0] || 'Anonim';
+      await addDoc(collection(sessionRef, 'messages'), {
+        text: updatedText,
+        senderId: user.uid,
+        senderName: myName,
+        timestamp: serverTimestamp()
+      });
+      // Ne brišemo buffer odmah, nego puštamo da normalan flow obriše liveTranscript kasnije
+      // ali smo obezbedili da je u istoriji. 
+      // Zapravo, ako smo komitovali, treba da resetujemo buffer da ne bi duplirali
+      sessionBufferRef.current = ''; 
+    }
+
     try {
       await setDoc(sessionRef, {
         liveTranscripts: {
           [user.uid]: {
-            text: updatedText,
+            text: sessionBufferRef.current, // Može biti prazno ako smo upravo komitovali
             senderId: user.uid,
             senderName: myName,
             updatedAt: Date.now()
@@ -556,6 +573,7 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
         const myName = config.myName || user.displayName || user.email?.split('@')[0] || 'Anonim';
         const sessionRef = doc(db, 'sessions', sessionId);
         
+        // Prvo upisujemo u poruke
         await addDoc(collection(sessionRef, 'messages'), {
           text: textToCommit,
           senderId: user.uid,
@@ -563,19 +581,17 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
           timestamp: serverTimestamp()
         });
 
-        // Clear buffer - the transition to history should be seamless now
-        // because the listener for 'messages' will pick it up.
-        // We delay clearing the live transcript just a bit more to ensure 
-        // the new message document has propagated back to our local 'messages' state.
+        // BUFFER REŠENJE: 
+        // Brišemo live transcript tek nakon duže pauze (12s) da bi bio vidljiv na ekranu
         setTimeout(async () => {
           if (sessionBufferRef.current.trim() === textToCommit) {
             sessionBufferRef.current = '';
+            await updateDoc(sessionRef, {
+              [`liveTranscripts.${user.uid}`]: deleteField()
+            });
           }
-          await updateDoc(sessionRef, {
-            [`liveTranscripts.${user.uid}`]: deleteField()
-          });
-        }, 1500);
-      }, 3000); 
+        }, 12000); 
+      }, 3500); 
     } catch (err) {
       console.error('Sync error:', err);
     }
@@ -775,13 +791,13 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
             if (!data?.text) return null;
             
             // Provera da li je ovaj text već u listi poslednjih poruka
-            const alreadyInMessages = messages.slice(-2).some(m => 
-              m.text.toLowerCase().includes(data.text.toLowerCase().trim()) ||
-              data.text.toLowerCase().includes(m.text.toLowerCase().trim())
+            const alreadyInMessages = messages.slice(-1).some(m => 
+              m.text.toLowerCase().trim() === data.text.toLowerCase().trim()
             );
             if (alreadyInMessages) return null;
 
-            const isStale = Date.now() - (data.updatedAt || 0) > 10000;
+            // Povećavamo vreme vidljivosti na 60 sekundi da bi korisnik mogao da pročita
+            const isStale = Date.now() - (data.updatedAt || 0) > 60000;
             if (isStale) return null;
 
             return (

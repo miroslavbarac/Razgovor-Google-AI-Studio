@@ -21,14 +21,18 @@ export function useSpeechToText({
   
   const recognitionRef = useRef<any>(null);
   const isListeningRequested = useRef(false);
+  const isStartingNative = useRef(false);
   const lastResultTimeRef = useRef(Date.now());
+  const restartDebounceRef = useRef<NodeJS.Timeout | null>(null);
   const onResultRef = useRef(onResult);
   const onErrorRef = useRef(onError);
   const isNative = Capacitor.isNativePlatform();
 
   useEffect(() => {
     onResultRef.current = (text: string, isFinal: boolean) => {
-      lastResultTimeRef.current = Date.now();
+      if (text.trim()) {
+        lastResultTimeRef.current = Date.now();
+      }
       if (onResult) onResult(text, isFinal);
     };
     onErrorRef.current = onError;
@@ -37,12 +41,14 @@ export function useSpeechToText({
   const stop = useCallback(async () => {
     console.log('Zaustavljanje mikrofona...');
     isListeningRequested.current = false;
+    isStartingNative.current = false;
+    if (restartDebounceRef.current) clearTimeout(restartDebounceRef.current);
+    
     setIsListening(false);
     setIsRecognitionActive(false);
     
     if (isNative) {
       try {
-        await SpeechRecognition.removeAllListeners();
         await SpeechRecognition.stop();
         console.log('Native recognition zaustavljen.');
       } catch (e) {
@@ -123,6 +129,59 @@ export function useSpeechToText({
 
   const isSupported = isNative ? true : !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
 
+  const startNativeRecognition = useCallback(async () => {
+    if (isStartingNative.current || isRecognitionActive) {
+      return;
+    }
+
+    console.log('Pokrećem native prepoznavanje...');
+    isStartingNative.current = true;
+    setIsListening(true);
+    lastResultTimeRef.current = Date.now();
+
+    try {
+      const available = await SpeechRecognition.available();
+      if (!available.available) {
+        setError('Prepoznavanje govora nije dostupno.');
+        setIsListening(false);
+        isListeningRequested.current = false;
+        isStartingNative.current = false;
+        return;
+      }
+
+      let permissions = await SpeechRecognition.checkPermissions();
+      if (permissions.speechRecognition !== 'granted') {
+        permissions = await SpeechRecognition.requestPermissions();
+        if (permissions.speechRecognition !== 'granted') {
+          setError('Nema dozvole za mikrofon.');
+          setIsListening(false);
+          isListeningRequested.current = false;
+          isStartingNative.current = false;
+          return;
+        }
+      }
+
+      setError(null);
+      await SpeechRecognition.start({
+        language: lang,
+        partialResults: true,
+        popup: false,
+      });
+      
+      setIsRecognitionActive(true);
+      console.log('Native prepoznavanje uspešno pokrenuto.');
+    } catch (e: any) {
+      console.error('Greška pri startu native mikrofona:', e);
+      if (e.message && e.message.includes('already started')) {
+        setIsRecognitionActive(true);
+      } else {
+        setIsRecognitionActive(false);
+      }
+    } finally {
+      isStartingNative.current = false;
+    }
+  }, [lang, isRecognitionActive]);
+
   // Native Listeners setup
   useEffect(() => {
     if (!isNative) return;
@@ -138,23 +197,35 @@ export function useSpeechToText({
         });
 
         await SpeechRecognition.addListener('listeningState', (data: any) => {
-          console.log('Native listening state changed:', data.status);
+          console.log('Native state:', data.status);
           setIsRecognitionActive(data.status === 'started');
+          
+          if (data.status === 'stopped' && isListeningRequested.current) {
+            // Debounced restart
+            if (restartDebounceRef.current) clearTimeout(restartDebounceRef.current);
+            restartDebounceRef.current = setTimeout(() => {
+              if (isListeningRequested.current && !isRecognitionActive) {
+                startNativeRecognition();
+              }
+            }, 600);
+          }
         });
 
-        // Use any because the plugin types might be outdated in our environment
         (SpeechRecognition as any).addListener('error', (data: any) => {
-          console.warn('Native speech error listener:', data);
+          console.warn('Native error:', data);
           setIsRecognitionActive(false);
           
           if (data.error === 'not-allowed' || data.error === 'service-not-allowed') {
-            setError('Mikrofon nije odobren u sistemu.');
+            setError('Mikrofon nije odobren.');
             setIsListening(false);
             isListeningRequested.current = false;
-          } else if (data.error === 'network' || data.error === 'network-timeout') {
-            setError('Greška mreže. Proverite internet.');
+          } else if (isListeningRequested.current) {
+            // Restart on most errors except permissions
+            if (restartDebounceRef.current) clearTimeout(restartDebounceRef.current);
+            restartDebounceRef.current = setTimeout(() => {
+              if (isListeningRequested.current) startNativeRecognition();
+            }, 1000);
           }
-          // no-speech and others are handled by the restart logic watching isRecognitionActive
         });
       } catch (e) {
         console.error('Error setting up listeners:', e);
@@ -164,93 +235,26 @@ export function useSpeechToText({
     setupListeners();
     return () => {
       SpeechRecognition.removeAllListeners();
+      if (restartDebounceRef.current) clearTimeout(restartDebounceRef.current);
     };
-  }, [isNative]);
+  }, [isNative, startNativeRecognition]);
 
-  const startNativeRecognition = useCallback(async () => {
-    // Ako je već aktivan, ne radimo ništa
-    if (isRecognitionActive) {
-      console.log('Native prepoznavanje je već aktivno.');
-      return;
-    }
-    
-    console.log('Pokrećem native prepoznavanje (startNative)...');
-    isListeningRequested.current = true;
-    setIsListening(true);
-
-    try {
-      const available = await SpeechRecognition.available();
-      if (!available.available) {
-        setError('Prepoznavanje govora nije dostupno.');
-        setIsListening(false);
-        isListeningRequested.current = false;
-        return;
-      }
-
-      let permissions = await SpeechRecognition.checkPermissions();
-      if (permissions.speechRecognition !== 'granted') {
-        permissions = await SpeechRecognition.requestPermissions();
-        if (permissions.speechRecognition !== 'granted') {
-          setError('Nema dozvole za mikrofon.');
-          setIsListening(false);
-          isListeningRequested.current = false;
-          return;
-        }
-      }
-
-      setError(null);
-      
-      await SpeechRecognition.start({
-        language: lang,
-        partialResults: true,
-        popup: false,
-      });
-      
-      setIsRecognitionActive(true);
-      console.log('Native prepoznavanje uspešno pokrenuto.');
-
-    } catch (e: any) {
-      console.error('Bacio grešku pri startu:', e);
-      
-      if (e.message && e.message.includes('already started')) {
-        setIsRecognitionActive(true);
-        return;
-      }
-      
-      setIsRecognitionActive(false);
-      // Restartuj posle sekunde ako je ipak puklo
-      if (isListeningRequested.current) {
-        setTimeout(() => {
-          if (isListeningRequested.current && !isRecognitionActive) {
-             startNativeRecognition();
-          }
-        }, 1500);
-      }
-    }
-  }, [lang, isRecognitionActive]);
-
-  // Restart logic for Native (Watchdog)
+  // Watchdog - Manje agresivno, samo kao zadnja linija odbrane
   useEffect(() => {
     if (!isNative) return;
 
     const interval = setInterval(() => {
       const now = Date.now();
-      // On Android, the recognition service often dies after 3-5s of silence
-      const inactiveTooLong = now - lastResultTimeRef.current > 6000;
+      const inactiveTooLong = now - lastResultTimeRef.current > 20000;
       
-      if (isListeningRequested.current) {
+      if (isListeningRequested.current && !isStartingNative.current) {
         if (!isRecognitionActive || inactiveTooLong) {
-          if (inactiveTooLong && isRecognitionActive) {
-            console.log('Watchdog: Nema rezultata 6s. Forsiram restart...');
-          } else if (!isRecognitionActive) {
-            console.log('Watchdog: Mikrofon je ugašen. Restartujem...');
-          }
-          // Reset status to allow start
+          console.log('Watchdog: Force restart...');
           setIsRecognitionActive(false);
           startNativeRecognition();
         }
       }
-    }, 1000);
+    }, 5000);
 
     return () => clearInterval(interval);
   }, [isNative, isRecognitionActive, startNativeRecognition]);
