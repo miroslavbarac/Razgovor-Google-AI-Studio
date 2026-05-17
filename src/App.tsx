@@ -510,92 +510,78 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
   const [participants, setParticipants] = useState<Record<string, string>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  const commitSegment = useCallback(async (textToCommit: string) => {
+    if (!textToCommit.trim() || !sessionId || !user) return;
+    try {
+      const myName = config.myName || user.displayName || user.email?.split('@')[0] || 'Anonim';
+      const sessionRef = doc(db, 'sessions', sessionId);
+      
+      await addDoc(collection(sessionRef, 'messages'), {
+        text: textToCommit,
+        senderId: user.uid,
+        senderName: myName,
+        timestamp: serverTimestamp()
+      });
+
+      // Zadržavamo tekst na ekranu još 30 sekundi nakon što ode u istoriju
+      setTimeout(async () => {
+        if (sessionBufferRef.current.trim() === textToCommit.trim()) {
+           sessionBufferRef.current = '';
+           await updateDoc(sessionRef, {
+             [`liveTranscripts.${user.uid}`]: deleteField()
+           });
+        }
+      }, 30000); 
+    } catch (err) {
+       console.error('Commit error:', err);
+    }
+  }, [sessionId, user, config.myName]);
+
   const onTranscriptResult = useCallback(async (text: string, isFinal: boolean) => {
     const trimmed = text.trim();
     if (!trimmed) return;
     
-    const sessionRef = doc(db, 'sessions', sessionId);
-    const myName = config.myName || user.displayName || user.email?.split('@')[0] || 'Anonim';
-
-    if (commitTimeoutRef.current) clearTimeout(commitTimeoutRef.current);
-
     // Na Androidu (Native), svako novo javljanje nakon pauze je novi "segment".
-    // Plugin partialResults na Androidu vraća ceo trenutni segment.
-    
     const currentBuffer = sessionBufferRef.current.trim();
     let updatedText = trimmed;
 
-    if (isNative) {
-      // Ako trimmed ne počinje onim što imamo, a imamo nešto, verovatno je Android restartovao sesiju
-      // ili se vratio novi segment. 
-      // Proveravamo da li je trimmed očigledno novi segment (ne sadrži kraj starog)
-      const lastWords = currentBuffer.split(' ').slice(-3).join(' ').toLowerCase();
-      if (currentBuffer && lastWords && !trimmed.toLowerCase().includes(lastWords)) {
+    if (isNative && currentBuffer) {
+      const words = currentBuffer.split(/\s+/);
+      const lastThree = words.slice(-3).join(' ').toLowerCase();
+      if (lastThree && !trimmed.toLowerCase().includes(lastThree)) {
         updatedText = `${currentBuffer} ${trimmed}`;
       }
     }
     
     sessionBufferRef.current = updatedText;
 
-    // SIMULTANI UPIS: Ako govornik priča dugo bez pauze (npr. više od 30 reči), 
-    // komitujemo jedan segment odmah da ne bi nestalo sa ekrana ili ostalo samo lokalno
-    const words = updatedText.split(/\s+/).filter(Boolean).length;
-    if (words > 25) {
-      const myName = config.myName || user.displayName || user.email?.split('@')[0] || 'Anonim';
-      await addDoc(collection(sessionRef, 'messages'), {
-        text: updatedText,
-        senderId: user.uid,
-        senderName: myName,
-        timestamp: serverTimestamp()
-      });
-      // Ne brišemo buffer odmah, nego puštamo da normalan flow obriše liveTranscript kasnije
-      // ali smo obezbedili da je u istoriji. 
-      // Zapravo, ako smo komitovali, treba da resetujemo buffer da ne bi duplirali
-      sessionBufferRef.current = ''; 
-    }
-
+    // SIMULTANI UPIS: Nadograđujemo 'liveTranscripts' odmah
     try {
+      const sessionRef = doc(db, 'sessions', sessionId);
+      const myName = config.myName || user.displayName || user.email?.split('@')[0] || 'Anonim';
       await setDoc(sessionRef, {
         liveTranscripts: {
           [user.uid]: {
-            text: sessionBufferRef.current, // Može biti prazno ako smo upravo komitovali
+            text: updatedText,
             senderId: user.uid,
             senderName: myName,
             updatedAt: Date.now()
           }
         }
       }, { merge: true });
+    } catch (e) {}
 
-      commitTimeoutRef.current = setTimeout(async () => {
-        const textToCommit = sessionBufferRef.current.trim();
-        if (!textToCommit) return;
-        
-        const myName = config.myName || user.displayName || user.email?.split('@')[0] || 'Anonim';
-        const sessionRef = doc(db, 'sessions', sessionId);
-        
-        // Prvo upisujemo u poruke
-        await addDoc(collection(sessionRef, 'messages'), {
-          text: textToCommit,
-          senderId: user.uid,
-          senderName: myName,
-          timestamp: serverTimestamp()
-        });
-
-        // BUFFER REŠENJE: 
-        // Brišemo live transcript tek nakon duže pauze (12s) da bi bio vidljiv na ekranu
-        setTimeout(async () => {
-          if (sessionBufferRef.current.trim() === textToCommit) {
-            sessionBufferRef.current = '';
-            await updateDoc(sessionRef, {
-              [`liveTranscripts.${user.uid}`]: deleteField()
-            });
-          }
-        }, 12000); 
-      }, 3500); 
-    } catch (err) {
-      console.error('Sync error:', err);
+    // AUTOMATSKI KOMIT u istoriju ako postane predugačko
+    const wordCount = updatedText.split(/\s+/).filter(Boolean).length;
+    if (wordCount > 25) {
+       commitSegment(updatedText);
     }
-  }, [sessionId, user, config.myName, isNative]);
+
+    if (commitTimeoutRef.current) clearTimeout(commitTimeoutRef.current);
+    commitTimeoutRef.current = setTimeout(() => {
+      commitSegment(sessionBufferRef.current);
+    }, 4000); 
+  }, [sessionId, user, config.myName, isNative, commitSegment]);
 
   const { isListening, isRecognitionActive, start, stop, error } = useSpeechToText({
     lang: 'sr-RS',
