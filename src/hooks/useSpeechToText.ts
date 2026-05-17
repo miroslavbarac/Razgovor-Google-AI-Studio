@@ -119,6 +119,43 @@ export function useSpeechToText({
 
   const isSupported = isNative ? true : !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
 
+  // Native Listeners setup
+  useEffect(() => {
+    if (!isNative) return;
+
+    const setupListeners = async () => {
+      await SpeechRecognition.removeAllListeners();
+      
+      await SpeechRecognition.addListener('partialResults', (data: any) => {
+        if (onResultRef.current && data.matches && data.matches.length > 0) {
+          onResultRef.current(data.matches[0], false);
+        }
+      });
+
+      await SpeechRecognition.addListener('listeningState', (data: any) => {
+        console.log('Native listening state:', data.status);
+        setIsRecognitionActive(data.status === 'started');
+      });
+
+      (SpeechRecognition as any).addListener('error', (data: any) => {
+        console.error('Native speech error:', data);
+        if (data.error === 'not-allowed' || data.error === 'service-not-allowed') {
+          setError('Dozvola za mikrofon nije odobrena.');
+          setIsListening(false);
+          isListeningRequested.current = false;
+        } else if (data.error === 'no-speech') {
+          // Normal on Android to stop on silence
+          setIsRecognitionActive(false);
+        }
+      });
+    };
+
+    setupListeners();
+    return () => {
+      SpeechRecognition.removeAllListeners();
+    };
+  }, [isNative]);
+
   const startNativeRecognition = useCallback(async () => {
     if (isRecognitionActive) return;
     
@@ -147,38 +184,28 @@ export function useSpeechToText({
       }
 
       setError(null);
-      await SpeechRecognition.removeAllListeners();
+      // We don't remove listeners here, they are set in useEffect
 
-      SpeechRecognition.addListener('partialResults', (data: any) => {
-        if (onResultRef.current && data.matches && data.matches.length > 0) {
-          onResultRef.current(data.matches[0], false);
-        }
-      });
-
-      SpeechRecognition.addListener('listeningState', (data: any) => {
-        console.log('Native listening state:', data.status);
-        setIsRecognitionActive(data.status === 'started');
-      });
-
-      setIsRecognitionActive(true);
       await SpeechRecognition.start({
         language: lang,
         partialResults: true,
         popup: false,
       });
+      setIsRecognitionActive(true);
 
     } catch (e: any) {
       console.error('Greška u native prepoznavanju:', e);
-      setIsRecognitionActive(false);
       if (e.message && e.message.includes('already started')) {
         setIsRecognitionActive(true);
         return;
       }
       
+      setIsRecognitionActive(false);
       if (isListeningRequested.current) {
+        // Retry one more time
         setTimeout(() => {
-          if (isListeningRequested.current) startNativeRecognition();
-        }, 1500);
+          if (isListeningRequested.current && !isRecognitionActive) startNativeRecognition();
+        }, 1000);
       }
     }
   }, [lang, isRecognitionActive]);
@@ -190,13 +217,13 @@ export function useSpeechToText({
     let restartTimer: NodeJS.Timeout;
 
     if (isListening && !isRecognitionActive && isListeningRequested.current) {
-      // 2 sekunde pauze pre restarta da izbegnemo "flapping"
+      // 1 sekunda pauze pre restarta
       restartTimer = setTimeout(() => {
         if (isListeningRequested.current && !isRecognitionActive) {
-          console.log('Automatski restartujem mikrofon nakon pauze...');
+          console.log('Restartujem mikrofon...');
           startNativeRecognition();
         }
-      }, 2000);
+      }, 1000);
     }
 
     return () => {
@@ -260,6 +287,7 @@ export function useSpeechToText({
     error,
     start,
     stop,
+    isNative,
     isSupported: isNative ? true : !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
   };
 }

@@ -15,6 +15,7 @@ import type { User } from './lib/firebase';
 import { LogIn, Mic, Users, Settings as SettingsIcon, LogOut, Copy, Check, MessageSquare, QrCode, Trash2, Mail, User as UserIcon, X, History, Clock, ChevronLeft } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useSpeechToText } from './hooks/useSpeechToText';
+import { Capacitor } from '@capacitor/core';
 import { toCyrillic } from './lib/transliterate';
 import { collection, onSnapshot, query, orderBy, addDoc, updateDoc, deleteDoc, deleteField } from 'firebase/firestore';
 import { QRCodeSVG } from 'qrcode.react';
@@ -384,12 +385,24 @@ const HistoryView = ({ config, onBack }: { config: AppConfig; onBack: () => void
       ) : (
         <div className="space-y-6 pb-20">
           {currentGroups[selectedDate].sort((a,b) => (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0)).map((m) => (
-            <div key={m.id} className="bg-white p-6 rounded-3xl border border-black/5 shadow-sm">
+            <div key={m.id} className="group bg-white p-6 rounded-3xl border border-black/5 shadow-sm">
                <div className="flex justify-between items-start mb-3">
-                 <p className="text-[10px] font-black text-accent-red uppercase tracking-widest">{m.senderName}</p>
-                 <p className="text-[10px] font-bold text-gray-400">
-                   {m.timestamp?.seconds ? new Date(m.timestamp.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '...'}
-                 </p>
+                 <div className="flex flex-col">
+                   <p className="text-[10px] font-black text-accent-red uppercase tracking-widest">{m.senderName}</p>
+                   <p className="text-[10px] font-bold text-gray-400">
+                     {m.timestamp?.seconds ? new Date(m.timestamp.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '...'}
+                   </p>
+                 </div>
+                 <button 
+                   onClick={async () => {
+                     if (window.confirm('Obriši ovu poruku?')) {
+                       await deleteDoc(doc(db, 'sessions', 'RAZGOVOR', 'messages', m.id));
+                     }
+                   }}
+                   className="p-2 text-gray-200 hover:text-accent-red transition-colors opacity-0 group-hover:opacity-100"
+                 >
+                   <Trash2 size={16} />
+                 </button>
                </div>
                <p 
                  className="text-lg font-bold text-primary-dark leading-snug"
@@ -414,6 +427,7 @@ interface Message {
 }
 
 const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHistory }: { sessionId: string; user: User; onExit: () => void; config: AppConfig; onOpenSettings: () => void; onOpenHistory: () => void }) => {
+  const isNative = Capacitor.isNativePlatform();
   const [messages, setMessages] = useState<Message[]>([]);
   const [liveTranscripts, setLiveTranscripts] = useState<Record<string, any>>({});
   
@@ -433,16 +447,21 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
 
     if (commitTimeoutRef.current) clearTimeout(commitTimeoutRef.current);
 
-    if (isFinal) {
-      const currentBuffer = sessionBufferRef.current.trim();
-      // Simple append if not duplicate
-      if (!currentBuffer.toLowerCase().endsWith(trimmed.toLowerCase())) {
-        sessionBufferRef.current = currentBuffer ? `${currentBuffer} ${trimmed}` : trimmed;
+    // Na Androidu (Native), svako novo javljanje je novi "segment" koji se nadovezuje
+    // Na Webu, useSpeechToText već šalje parcijale
+    
+    const currentBuffer = sessionBufferRef.current.trim();
+    let currentText = trimmed;
+
+    if (isNative) {
+      // Provera da li je trimmed nastavak ili novi segment
+      // Ako trimmed ne počinje onim što već imamo, a imamo nešto, verovatno je Android restartovao sesiju
+      if (currentBuffer && !trimmed.toLowerCase().startsWith(currentBuffer.toLowerCase().slice(0, 5))) {
+        currentText = `${currentBuffer} ${trimmed}`;
       }
     }
-
-    const displayBuffer = sessionBufferRef.current;
-    const currentText = isFinal ? displayBuffer : (displayBuffer ? `${displayBuffer} ${trimmed}` : trimmed);
+    
+    sessionBufferRef.current = currentText;
 
     try {
       await setDoc(sessionRef, {
@@ -472,14 +491,13 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
           timestamp: serverTimestamp()
         });
 
-        await updateDoc(sessionRef, {
-          [`liveTranscripts.${user.uid}`]: deleteField()
-        });
-      }, 6000); 
+        // Ne brišemo odmah liveTranscript da ne bi bilo "skakanja" na ekranu
+        // On će nestati prirodno nakon 8s (stale check) ili prvim sledećim kucanjem
+      }, 5000); 
     } catch (err) {
       console.error('Sync error:', err);
     }
-  }, [sessionId, user, config.myName]);
+  }, [sessionId, user, config.myName, isNative]);
 
   const { isListening, isRecognitionActive, start, stop, error } = useSpeechToText({
     lang: 'sr-RS',
@@ -640,40 +658,34 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
         )}
 
         <div className="w-full max-w-4xl">
-          {messages.map((m) => (
-              <div className={`mb-12 flex flex-col w-full ${m.senderId === user.uid ? 'items-end' : 'items-start'}`}>
-                <div className="flex items-start gap-4 w-full">
-                  {m.senderId !== user.uid && (
-                    <button 
-                      onClick={() => deleteMessage(m.id)}
-                      className="mt-4 p-2 text-primary-dark/5 hover:text-accent-red transition-colors"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  )}
+          {messages.map((m) => {
+            const isMe = m.senderId === user.uid;
+            return (
+              <div key={m.id} className={`group mb-12 flex flex-col w-full ${isMe ? 'items-end' : 'items-start'}`}>
+                <div className={`flex items-start gap-4 w-full ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
                   <div 
                     className={`
                       flex-1 p-1 rounded-3xl font-extrabold leading-[1.1] tracking-tight
-                      ${m.senderId === user.uid ? 'text-right' : 'text-left'}
+                      ${isMe ? 'text-right' : 'text-left'}
                     `}
                     style={{ fontSize: `${config.textSize * 2.5}rem` }}
                   >
                     {displayText(m.text)}
                   </div>
-                  {m.senderId === user.uid && (
-                    <button 
-                      onClick={() => deleteMessage(m.id)}
-                      className="mt-4 p-2 text-primary-dark/5 hover:text-accent-red transition-colors"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  )}
+                  <button 
+                    onClick={() => deleteMessage(m.id)}
+                    className="mt-4 p-2 text-primary-dark/5 hover:text-accent-red transition-colors opacity-0 group-hover:opacity-100"
+                    title="Obriši"
+                  >
+                    <Trash2 size={16} />
+                  </button>
                 </div>
                 <p className="mt-4 text-[10px] font-black text-primary-dark/20 uppercase tracking-[0.2em]">
                   {m.senderName} • {m.timestamp?.seconds ? new Date(m.timestamp.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '...'}
                 </p>
               </div>
-          ))}
+            );
+          })}
 
           {/* Live transcripts */}
           {Object.entries(liveTranscripts).map(([uid, data]: [string, any]) => {
