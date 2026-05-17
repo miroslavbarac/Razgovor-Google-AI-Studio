@@ -114,39 +114,43 @@ export function useSpeechToText({
     return recognition;
   }, [lang]);
 
+  const isSupported = isNative ? true : !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+
   const startNativeRecognition = useCallback(async () => {
-    console.log('Starting native recognition...');
+    console.log('Pokrećem native prepoznavanje...');
     try {
+      // 1. Provera dostupnosti servisa na uređaju
       const available = await SpeechRecognition.available();
-      console.log('Recognition available:', available);
+      console.log('Dostupnost:', available);
       if (!available.available) {
-        setError('Prepoznavanje govora nije dostupno na ovom uređaju.');
+        setError('Prepoznavanje govora nije dostupno na ovom uređaju. Proverite Google aplikaciju.');
         setIsListening(false);
         return;
       }
 
-      const permissions = await SpeechRecognition.checkPermissions();
-      console.log('Current permissions:', permissions);
+      // 2. Provera i zahtevanje dozvola
+      let permissions = await SpeechRecognition.checkPermissions();
+      console.log('Trenutne dozvole:', permissions);
       
-      // Check for both common permission keys
-      const hasPermission = (permissions as any).speechRecognition === 'granted' || (permissions as any).microphone === 'granted';
-      
-      if (!hasPermission) {
-        console.log('Requesting permissions...');
-        const result = await SpeechRecognition.requestPermissions();
-        console.log('Permission request result:', result);
-        const granted = (result as any).speechRecognition === 'granted' || (result as any).microphone === 'granted';
+      if (permissions.speechRecognition !== 'granted') {
+        console.log('Zahtevam dozvole...');
+        permissions = await SpeechRecognition.requestPermissions();
+        console.log('Rezultat zahteva:', permissions);
         
-        if (!granted) {
-          setError('Dozvola za mikrofon nije odobrena.');
+        if (permissions.speechRecognition !== 'granted') {
+          setError('Dozvola za mikrofon nije odobrena u sistemu.');
           setIsListening(false);
           return;
         }
       }
 
+      // 3. Pokretanje slušanja
       setIsListening(true);
       setIsRecognitionActive(true);
       setError(null);
+
+      // Uklanjamo stare listenere pre dodavanja novih
+      await SpeechRecognition.removeAllListeners();
 
       SpeechRecognition.addListener('partialResults', (data: any) => {
         if (onResultRef.current && data.matches && data.matches.length > 0) {
@@ -161,8 +165,8 @@ export function useSpeechToText({
       });
 
     } catch (e: any) {
-      console.error('Native recognition error:', e);
-      setError(`Greška: ${e.message || 'Neuspešno pokretanje prepoznavanja'}`);
+      console.error('Greška u native prepoznavanju:', e);
+      setError(`Greška: ${e.message || 'Neuspešno pokretanje'}`);
       setIsListening(false);
       setIsRecognitionActive(false);
     }
@@ -171,6 +175,11 @@ export function useSpeechToText({
   const start = useCallback(() => {
     if (isNative) {
       startNativeRecognition();
+      return;
+    }
+
+    if (!isSupported) {
+      setError('Prepoznavanje govora nije podržano u ovom pregledaču.');
       return;
     }
 
