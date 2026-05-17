@@ -4,6 +4,7 @@
   "webDir": "dist",
   "bundledWebRuntime": false,
   "server": {
+    "hostname": "razgovor.app",
     "allowNavigation": [
       "*.firebaseapp.com",
       "*.googleapis.com"
