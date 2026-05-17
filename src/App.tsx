@@ -94,20 +94,44 @@ const Dashboard = ({ user, config, onJoin, onOpenSettings, onOpenHistory, setCon
         </div>
 
         {!config.partnerEmail ? (
-          <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-dashed border-primary-dark/20 flex flex-col items-center text-center gap-4">
-             <div className="w-12 h-12 bg-gray-50 text-gray-300 rounded-full flex items-center justify-center">
-               <Users size={24} />
+          <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-black/5 flex flex-col gap-6">
+             <div className="flex items-center gap-6">
+               <div className="w-12 h-12 bg-gray-50 text-gray-300 rounded-full flex items-center justify-center">
+                 <Users size={24} />
+               </div>
+               <div className="flex-1">
+                 <p className="text-[10px] font-black text-primary-dark/30 uppercase tracking-widest mb-1">DODAJ SAGOVORNIKA</p>
+                 <p className="text-sm font-medium text-primary-dark/40">Unesi email osobe sa kojom želiš razgovor</p>
+               </div>
              </div>
-             <div>
-               <p className="text-lg font-bold text-primary-dark">Dodaj sagovornika</p>
-               <p className="text-sm font-medium text-primary-dark/40">Unesi email osobe sa kojom želiš razgovor</p>
+             <div className="flex gap-2">
+               <input 
+                 type="email"
+                 placeholder="email@primer.com"
+                 className="flex-1 bg-page-bg border-2 border-transparent rounded-2xl px-4 py-3 text-sm font-bold focus:border-accent-red outline-none transition-all"
+                 onKeyDown={(e) => {
+                   if (e.key === 'Enter') {
+                     const email = (e.currentTarget as HTMLInputElement).value;
+                     if (email.includes('@')) {
+                       setConfig({ ...config, partnerEmail: email });
+                     }
+                   }
+                 }}
+               />
+               <button 
+                 onClick={(e) => {
+                   const input = e.currentTarget.previousElementSibling as HTMLInputElement;
+                   if (input.value.includes('@')) {
+                     setConfig({ ...config, partnerEmail: input.value });
+                   } else {
+                     alert('Unesite ispravan email.');
+                   }
+                 }}
+                 className="bg-primary-dark text-white px-6 rounded-2xl text-xs font-black uppercase hover:bg-black transition-all"
+               >
+                 OK
+               </button>
              </div>
-             <button 
-               onClick={onOpenSettings} 
-               className="px-6 py-3 bg-primary-dark text-white rounded-full text-sm font-bold hover:bg-black transition-all"
-             >
-               Podesi email
-             </button>
           </div>
         ) : (
           <div className="bg-white p-8 rounded-[2rem] shadow-sm flex items-center gap-6 border border-black/5 relative group">
@@ -539,8 +563,10 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
           timestamp: serverTimestamp()
         });
 
-        // Sačekamo malo pre nego što obrišemo live buffer sa ekrana
-        // Ovo omogućava bazi da učita novu poruku u listu pre nego što nestane live tekst
+        // Clear buffer - the transition to history should be seamless now
+        // because the listener for 'messages' will pick it up.
+        // We delay clearing the live transcript just a bit more to ensure 
+        // the new message document has propagated back to our local 'messages' state.
         setTimeout(async () => {
           if (sessionBufferRef.current.trim() === textToCommit) {
             sessionBufferRef.current = '';
@@ -548,8 +574,8 @@ const LiveSession = ({ sessionId, user, onExit, config, onOpenSettings, onOpenHi
           await updateDoc(sessionRef, {
             [`liveTranscripts.${user.uid}`]: deleteField()
           });
-        }, 1000);
-      }, 5000); 
+        }, 1500);
+      }, 3000); 
     } catch (err) {
       console.error('Sync error:', err);
     }

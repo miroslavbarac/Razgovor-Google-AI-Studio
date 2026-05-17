@@ -235,13 +235,14 @@ export function useSpeechToText({
 
     const interval = setInterval(() => {
       const now = Date.now();
-      const inactiveTooLong = now - lastResultTimeRef.current > 12000;
+      // On Android, the recognition service often dies after 3-5s of silence
+      const inactiveTooLong = now - lastResultTimeRef.current > 6000;
       
       if (isListeningRequested.current) {
         if (!isRecognitionActive || inactiveTooLong) {
           if (inactiveTooLong && isRecognitionActive) {
-            console.log('Watchdog: Nema rezultata predugo. Forsiram restart...');
-          } else {
+            console.log('Watchdog: Nema rezultata 6s. Forsiram restart...');
+          } else if (!isRecognitionActive) {
             console.log('Watchdog: Mikrofon je ugašen. Restartujem...');
           }
           // Reset status to allow start
@@ -249,7 +250,7 @@ export function useSpeechToText({
           startNativeRecognition();
         }
       }
-    }, 2500);
+    }, 1000);
 
     return () => clearInterval(interval);
   }, [isNative, isRecognitionActive, startNativeRecognition]);
