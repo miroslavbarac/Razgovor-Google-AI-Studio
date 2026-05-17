@@ -705,6 +705,8 @@ export default function App() {
     localStorage.setItem('razgovor_config', JSON.stringify(config));
   }, [config]);
 
+  const isLoggingIn = useRef(false);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const sessionFromUrl = params.get('session');
@@ -713,17 +715,27 @@ export default function App() {
       setView('session');
     }
 
+    console.log("App mounted, setting up auth...");
     const unsub = onAuthStateChanged(auth, async (u) => {
-      console.log("Auth state changed:", u ? "User present" : "No user");
+      console.log("Auth state changed:", u ? `User present: ${u.uid} (Anonymous: ${u.isAnonymous})` : "No user");
+      
       if (!u) {
+        if (isLoggingIn.current) {
+          console.log("Already attempting login, skipping...");
+          return;
+        }
+        
         try {
+          isLoggingIn.current = true;
           console.log("Attempting anonymous login...");
           await loginAnonymously();
           console.log("Anonymous login successful");
+          isLoggingIn.current = false;
         } catch (err: any) {
-          console.error("Auth error:", err);
+          console.error("Critical Auth error:", err);
           setAuthError(err.message || String(err));
           setLoading(false);
+          isLoggingIn.current = false;
         }
       } else {
         setUser(u);
