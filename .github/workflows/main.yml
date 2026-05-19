@@ -24,4 +24,4 @@ jobs:
       - name: Build Android APK
         run: npx eas-cli build --platform android --profile preview --non-interactive
         env:
-          EXPO_TOKEN: ${{ secrets.REPLIT }}
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
